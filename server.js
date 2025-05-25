@@ -71,7 +71,8 @@ app.post('/save-kreation', async (req, res) => {
       })) } })
     });
     const kreationText = await kreationRes.text();
-    let kreationData;
+    console.log("Status von Shopify:", kreationRes.status);
+    console.log("Antwort von Shopify:", kreationText);
     try {
       kreationData = JSON.parse(kreationText);
     } catch (e) {
