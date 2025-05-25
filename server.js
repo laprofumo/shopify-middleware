@@ -64,11 +64,32 @@ app.post('/save-kreation', async (req, res) => {
         'Content-Type': 'application/json',
         'X-Shopify-Access-Token': TOKEN,
       },
-      body: JSON.stringify({ metaobject: { type: 'parfumkreation', fields: Object.entries(kreation).map(([key, value]) => ({
-        key,
-        value: String(value),
-        type: 'single_line_text_field'
-      })) } })
+      body: JSON.stringify({ metaobject: { type: 'parfumkreation', fields: Object.entries(kreation).map(([key, value]) => {
+        const typeMap = {
+          name: 'single_line_text_field',
+          konzentration: 'single_line_text_field',
+          menge_ml: 'integer',
+          datum_erstellung: 'date',
+          bemerkung: 'multi_line_text_field',
+          duft_1_name: 'single_line_text_field',
+          duft_1_anteil: 'integer',
+          duft_1_gramm: 'number_decimal',
+          duft_1_ml: 'number_decimal',
+          duft_2_name: 'single_line_text_field',
+          duft_2_anteil: 'integer',
+          duft_2_gramm: 'number_decimal',
+          duft_2_ml: 'number_decimal',
+          duft_3_name: 'single_line_text_field',
+          duft_3_anteil: 'integer',
+          duft_3_gramm: 'number_decimal',
+          duft_3_ml: 'number_decimal'
+        };
+        return {
+          key,
+          value: String(value),
+          type: typeMap[key] || 'single_line_text_field'
+        };
+      }) } })
     });
     const kreationText = await kreationRes.text();
     console.log("Status von Shopify:", kreationRes.status);
