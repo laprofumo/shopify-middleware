@@ -54,6 +54,11 @@ app.get('/search-customer', async (req, res) => {
 app.post('/save-kreation', async (req, res) => {
   const { customerId, kreation } = req.body;
 
+  console.log("Empfangene Kreation:", kreation);
+  console.log("Customer ID:", customerId);
+
+  const { customerId, kreation } = req.body;
+
   try {
     const kreationRes = await fetch(`https://${SHOP}/admin/api/2023-10/metaobjects.json`, {
       method: 'POST',
@@ -63,7 +68,14 @@ app.post('/save-kreation', async (req, res) => {
       },
       body: JSON.stringify({ metaobject: { type: 'parfumkreation', fields: kreation } })
     });
-    const kreationData = await kreationRes.json();
+    const kreationText = await kreationRes.text();
+    let kreationData;
+    try {
+      kreationData = JSON.parse(kreationText);
+    } catch (e) {
+      console.error("❌ Antwort konnte nicht geparsed werden:", kreationText);
+      return res.status(500).json({ error: 'Shopify-Antwort nicht lesbar' });
+    }
     const metaobjectId = kreationData?.metaobject?.id;
 
     if (!metaobjectId) return res.status(400).json({ error: 'Fehler beim Metaobject' });
