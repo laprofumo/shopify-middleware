@@ -58,32 +58,35 @@ app.post('/save-kreation', async (req, res) => {
   console.log("Customer ID:", customerId);
 
   try {
-    const fields = Object.entries(kreation).map(([key, value]) => {
-      const typeMap = {
-        name: 'single_line_text_field',
-        konzentration: 'single_line_text_field',
-        menge_ml: 'integer',
-        datum_erstellung: 'date',
-        bemerkung: 'multi_line_text_field',
-        duft_1_name: 'single_line_text_field',
-        duft_1_anteil: 'integer',
-        duft_1_gramm: 'number_decimal',
-        duft_1_ml: 'number_decimal',
-        duft_2_name: 'single_line_text_field',
-        duft_2_anteil: 'integer',
-        duft_2_gramm: 'number_decimal',
-        duft_2_ml: 'number_decimal',
-        duft_3_name: 'single_line_text_field',
-        duft_3_anteil: 'integer',
-        duft_3_gramm: 'number_decimal',
-        duft_3_ml: 'number_decimal'
-      };
-      return {
-        key,
-        value: String(value),
-        type: typeMap[key] || 'single_line_text_field'
-      };
-    });
+    const fields = Object.entries(kreation)
+      .filter(([_, value]) => value !== null && value !== undefined)
+      .map(([key, value]) => {
+        const typeMap = {
+          name: 'single_line_text_field',
+          konzentration: 'single_line_text_field',
+          menge_ml: 'integer',
+          datum_erstellung: 'date',
+          bemerkung: 'multi_line_text_field',
+          duft_1_name: 'single_line_text_field',
+          duft_1_anteil: 'integer',
+          duft_1_gramm: 'number_decimal',
+          duft_1_ml: 'number_decimal',
+          duft_2_name: 'single_line_text_field',
+          duft_2_anteil: 'integer',
+          duft_2_gramm: 'number_decimal',
+          duft_2_ml: 'number_decimal',
+          duft_3_name: 'single_line_text_field',
+          duft_3_anteil: 'integer',
+          duft_3_gramm: 'number_decimal',
+          duft_3_ml: 'number_decimal'
+        };
+        const safeValue = String(value).trim() === '' ? 'keine' : String(value);
+        return {
+          key,
+          value: safeValue,
+          type: typeMap[key] || 'single_line_text_field'
+        };
+      });
 
     const payload = {
       metaobject: {
