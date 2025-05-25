@@ -66,6 +66,7 @@ app.post('/save-kreation', async (req, res) => {
       },
       body: JSON.stringify({ metaobject: {
         type: 'parfumkreation',
+        published: true,
         handle: `kreation-${Date.now()}`,
         fields: Object.entries(kreation).map(([key, value]) => {
         const typeMap = {
