@@ -11,7 +11,9 @@ const PORT = process.env.PORT || 3000;
 const SHOP = 'la-profumoteca-gmbh.myshopify.com';
 const TOKEN = process.env.SHOPIFY_TOKEN;
 
-app.use(cors());
+app.use(cors({
+  origin: 'https://flourishing-malabi-acba8d.netlify.app'
+}));
 app.use(bodyParser.json());
 
 // Kunden anlegen
