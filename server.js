@@ -57,8 +57,6 @@ app.post('/save-kreation', async (req, res) => {
   console.log("Empfangene Kreation:", kreation);
   console.log("Customer ID:", customerId);
 
-  const { customerId, kreation } = req.body;
-
   try {
     const kreationRes = await fetch(`https://${SHOP}/admin/api/2023-10/metaobjects.json`, {
       method: 'POST',
