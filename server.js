@@ -1,4 +1,3 @@
-
 // server.js – sichere Middleware für Shopify API
 import express from 'express';
 import cors from 'cors';
@@ -103,7 +102,8 @@ app.post('/save-kreation', async (req, res) => {
     }
     res.status(400).json({ error: 'Alle Slots belegt' });
   } catch (error) {
-    res.status(500).json({ error: 'Fehler beim Speichern' });
+    console.error("Fehler beim Speichern der Kreation:", error);
+    res.status(500).json({ error: error.message || 'Fehler beim Speichern' });
   }
 });
 
