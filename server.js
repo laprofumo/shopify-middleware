@@ -64,7 +64,10 @@ app.post('/save-kreation', async (req, res) => {
         'Content-Type': 'application/json',
         'X-Shopify-Access-Token': TOKEN,
       },
-      body: JSON.stringify({ metaobject: { type: 'parfumkreation', fields: Object.entries(kreation).map(([key, value]) => {
+      body: JSON.stringify({ metaobject: {
+        type: 'parfumkreation',
+        handle: `kreation-${Date.now()}`,
+        fields: Object.entries(kreation).map(([key, value]) => {
         const typeMap = {
           name: 'single_line_text_field',
           konzentration: 'single_line_text_field',
