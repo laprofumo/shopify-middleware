@@ -1,3 +1,4 @@
+
 // server.js – sichere Middleware für Shopify API
 import express from 'express';
 import cors from 'cors';
@@ -57,6 +58,13 @@ app.post('/save-kreation', async (req, res) => {
   console.log("Empfangene Kreation:", kreation);
   console.log("Customer ID:", customerId);
 
+  // Wandelt das kreation-Objekt in Shopify-konforme Felder um
+  const formattedFields = Object.entries(kreation).map(([key, value]) => ({
+    key,
+    value: String(value),
+    type: 'single_line_text_field'
+  }));
+
   try {
     const kreationRes = await fetch(`https://${SHOP}/admin/api/2023-10/metaobjects.json`, {
       method: 'POST',
@@ -64,7 +72,7 @@ app.post('/save-kreation', async (req, res) => {
         'Content-Type': 'application/json',
         'X-Shopify-Access-Token': TOKEN,
       },
-      body: JSON.stringify({ metaobject: { type: 'parfumkreation', fields: kreation } })
+      body: JSON.stringify({ metaobject: { type: 'parfumkreation', fields: formattedFields } })
     });
     const kreationText = await kreationRes.text();
     let kreationData;
