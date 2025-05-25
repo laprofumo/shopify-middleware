@@ -1,3 +1,4 @@
+
 // server.js – sichere Middleware für Shopify API
 import express from 'express';
 import cors from 'cors';
@@ -11,9 +12,13 @@ const PORT = process.env.PORT || 3000;
 const SHOP = 'la-profumoteca-gmbh.myshopify.com';
 const TOKEN = process.env.SHOPIFY_TOKEN;
 
-app.use(cors({
-  origin: 'https://flourishing-malabi-acba8d.netlify.app'
-}));
+const corsOptions = {
+  origin: 'https://flourishing-malabi-acba8d.netlify.app',
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+};
+
+app.use(cors(corsOptions));
 app.use(bodyParser.json());
 
 // Kunden anlegen
