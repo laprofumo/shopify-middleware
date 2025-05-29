@@ -7,14 +7,12 @@ import fetch from 'node-fetch';
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// 🔒 Sicher speichern in .env Datei oder Render Environment
 const SHOP = 'la-profumoteca-gmbh.myshopify.com';
 const TOKEN = process.env.SHOPIFY_TOKEN;
 
 app.use(cors({ origin: true }));
 app.use(bodyParser.json());
 
-// Kunden anlegen
 app.post('/create-customer', async (req, res) => {
   try {
     const response = await fetch(`https://${SHOP}/admin/api/2023-10/customers.json`, {
@@ -32,7 +30,6 @@ app.post('/create-customer', async (req, res) => {
   }
 });
 
-// Kundensuche
 app.get('/search-customer', async (req, res) => {
   const query = req.query.query || '';
   try {
@@ -50,7 +47,6 @@ app.get('/search-customer', async (req, res) => {
   }
 });
 
-// Kreationen zu einem Kunden lesen
 app.get('/get-kreationen', async (req, res) => {
   const customerId = req.query.customerId;
   if (!customerId) return res.status(400).json({ error: 'CustomerId fehlt' });
@@ -84,12 +80,8 @@ app.get('/get-kreationen', async (req, res) => {
   }
 });
 
-// Kreation speichern
 app.post('/save-kreation', async (req, res) => {
   const { customerId, kreation } = req.body;
-
-  console.log("Empfangene Kreation:", kreation);
-  console.log("Customer ID:", customerId);
 
   try {
     const fields = Object.entries(kreation)
@@ -131,8 +123,6 @@ app.post('/save-kreation', async (req, res) => {
       }
     };
 
-    console.log("🔍 Vollständige Payload an Shopify:", JSON.stringify(payload, null, 2));
-
     const kreationRes = await fetch(`https://${SHOP}/admin/api/2023-10/metaobjects.json`, {
       method: 'POST',
       headers: {
@@ -142,13 +132,10 @@ app.post('/save-kreation', async (req, res) => {
       body: JSON.stringify(payload)
     });
     const kreationText = await kreationRes.text();
-    console.log("Status von Shopify:", kreationRes.status);
-    console.log("Antwort von Shopify:", kreationText);
     let kreationData;
     try {
       kreationData = JSON.parse(kreationText);
     } catch (e) {
-      console.error("❌ Antwort konnte nicht geparsed werden:", kreationText);
       return res.status(500).json({ error: 'Shopify-Antwort nicht lesbar' });
     }
     const metaobjectId = kreationData?.metaobject?.id;
@@ -189,7 +176,6 @@ app.post('/save-kreation', async (req, res) => {
     }
     res.status(400).json({ error: 'Alle Slots belegt' });
   } catch (error) {
-    console.error("Fehler beim Speichern der Kreation:", error);
     res.status(500).json({ error: error.message || 'Fehler beim Speichern' });
   }
 });
