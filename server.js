@@ -50,6 +50,40 @@ app.get('/search-customer', async (req, res) => {
   }
 });
 
+// Kreationen zu einem Kunden lesen
+app.get('/get-kreationen', async (req, res) => {
+  const customerId = req.query.customerId;
+  if (!customerId) return res.status(400).json({ error: 'CustomerId fehlt' });
+
+  try {
+    const response = await fetch(`https://${SHOP}/admin/api/2023-10/customers/${customerId}/metafields.json`, {
+      headers: {
+        'X-Shopify-Access-Token': TOKEN,
+        'Content-Type': 'application/json'
+      }
+    });
+    const data = await response.json();
+    const kreationRefs = data.metafields.filter(f => f.key.startsWith('kreation_'));
+    const kreationen = [];
+
+    for (const ref of kreationRefs) {
+      const refId = ref.value;
+      const kreationRes = await fetch(`https://${SHOP}/admin/api/2023-10/metaobjects/${refId}.json`, {
+        headers: {
+          'X-Shopify-Access-Token': TOKEN,
+          'Content-Type': 'application/json'
+        }
+      });
+      const kreationData = await kreationRes.json();
+      kreationen.push(kreationData);
+    }
+
+    res.json({ kreationen });
+  } catch (error) {
+    res.status(500).json({ error: 'Fehler beim Lesen der Kreationen', details: error.message });
+  }
+});
+
 // Kreation speichern
 app.post('/save-kreation', async (req, res) => {
   const { customerId, kreation } = req.body;
