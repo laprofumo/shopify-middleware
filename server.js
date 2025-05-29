@@ -38,9 +38,49 @@ app.get('/search-customer', async (req,res)=>{
 });
 
 /******************** Kreationen eines Kunden holen ********************/
-app.get('/get-kreationen', async (req,res)=>{
-  const customerId=req.query.customerId;
-  if(!customerId) return res.status(400).json({error:'CustomerId fehlt'});
+app.get('/get-kreationen', async (req, res) => {
+  const customerId = req.query.customerId;
+  if (!customerId) return res.status(400).json({ error: 'CustomerId fehlt' });
+
+  try {
+    const metaRes = await fetch(`https://${SHOP}/admin/api/2023-10/customers/${customerId}/metafields.json`, {
+      headers: { 'X-Shopify-Access-Token': TOKEN, 'Content-Type': 'application/json' }
+    });
+    const metaJson = await metaRes.json();
+    const kreationRefs = metaJson.metafields.filter(f => f.key.startsWith('kreation_'));
+    const kreationen = [];
+
+    for (const ref of kreationRefs) {
+      let refId = ref.value;
+      // Wert kann eine gid sein ➜ numerische ID extrahieren
+      if (typeof refId === 'string' && refId.startsWith('gid://')) {
+        refId = refId.split('/').pop();
+      }
+      try {
+        const kRes = await fetch(`https://${SHOP}/admin/api/2023-10/metaobjects/${refId}.json`, {
+          headers: { 'X-Shopify-Access-Token': TOKEN, 'Content-Type': 'application/json' }
+        });
+        if (kRes.status === 200) {
+          const raw = await kRes.json();
+          console.log('🔎 RAW Metaobject‑Antwort:', raw);
+          const meta = raw.metaobject || raw;
+          // Name-Feld sicherstellen
+          const hasName = (meta.fields || []).some(f => f.key === 'name');
+          if (!hasName) meta.fields = [...(meta.fields || []), { key: 'name', value: meta.handle, type: 'single_line_text_field' }];
+          kreationen.push(meta);
+        } else {
+          console.log('⚠️ Metaobject', refId, 'nicht gefunden (Status', kRes.status, ')');
+        }
+      } catch (err) {
+        console.log('❌ Fehler beim Laden Metaobject', refId, err.message);
+      }
+    }
+
+    res.json({ kreationen });
+  } catch (error) {
+    res.status(500).json({ error: 'Fehler beim Lesen der Kreationen', details: error.message });
+  }
+});
   try{
     // 1) alle Metafelder des Kunden lesen
     const metaRes = await fetch(`https://${SHOP}/admin/api/2023-10/customers/${customerId}/metafields.json`,{
