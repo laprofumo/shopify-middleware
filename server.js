@@ -1,192 +1,217 @@
-// server.js – Shopify Middleware v5
-//  • REST für basic Ops
-//  • Fallback GraphQL‑Fetch, wenn Metaobject per REST 404 liefert
-// -------------------------------------------------------------
-import express from 'express';
-import cors from 'cors';
+// server.js – Middleware für Shopify (REST 2023-10)
+
+import express   from 'express';
+import cors      from 'cors';
 import bodyParser from 'body-parser';
-import fetch from 'node-fetch';
+import fetch     from 'node-fetch';
 
-const app = express();
-const PORT = process.env.PORT || 10000;
+const app  = express();
+const PORT = process.env.PORT || 3000;
 
-const SHOP = 'la-profumoteca-gmbh.myshopify.com';
+// →   .env  oder Render-“Environment” Variablen
+const SHOP  = 'la-profumoteca-gmbh.myshopify.com';
 const TOKEN = process.env.SHOPIFY_TOKEN;
 
 app.use(cors({ origin: true }));
 app.use(bodyParser.json());
 
-/*======================== 1) Kunden anlegen ========================*/
+/* =========== Helfer =========== */
+const headers = {
+  'X-Shopify-Access-Token': TOKEN,
+  'Content-Type': 'application/json'
+};
+
+function kreationToFields(kre) {
+  const typeMap = {
+    name: 'single_line_text_field',
+    konzentration: 'single_line_text_field',
+    menge_ml: 'integer',
+    datum_erstellung: 'date',
+    bemerkung: 'multi_line_text_field',
+    duft_1_name: 'single_line_text_field',
+    duft_1_anteil: 'integer',
+    duft_1_gramm: 'number_decimal',
+    duft_1_ml: 'number_decimal',
+    duft_2_name: 'single_line_text_field',
+    duft_2_anteil: 'integer',
+    duft_2_gramm: 'number_decimal',
+    duft_2_ml: 'number_decimal',
+    duft_3_name: 'single_line_text_field',
+    duft_3_anteil: 'integer',
+    duft_3_gramm: 'number_decimal',
+    duft_3_ml: 'number_decimal'
+  };
+
+  return Object.entries(kre)
+    .filter(([, value]) => value !== undefined && value !== null && value !== '')
+    .map(([key, value]) => ({
+      key,
+      value: String(value),
+      type: typeMap[key] || 'single_line_text_field'
+    }));
+}
+
+/* =========== Kunden anlegen =========== */
 app.post('/create-customer', async (req, res) => {
   try {
-    const r = await fetch(`https://${SHOP}/admin/api/2023-10/customers.json`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Shopify-Access-Token': TOKEN,
-        'Accept': 'application/json'
-      },
-      body: JSON.stringify({ customer: req.body })
-    });
-    return res.status(r.status).json(await r.json());
+    const shopRes = await fetch(
+      `https://${SHOP}/admin/api/2023-10/customers.json`,
+      { method: 'POST', headers, body: JSON.stringify({ customer: req.body }) }
+    );
+    const data = await shopRes.json();
+    res.status(shopRes.status).json(data);
   } catch (e) {
     res.status(500).json({ error: 'Fehler bei Kundenanlage', details: e.message });
   }
 });
 
-/*======================== 2) Kundensuche ===========================*/
+/* =========== Kundensuche =========== */
 app.get('/search-customer', async (req, res) => {
-  const query = req.query.query || '';
   try {
-    const r = await fetch(`https://${SHOP}/admin/api/2023-10/customers/search.json?query=${encodeURIComponent(query)}`, {
-      headers: {
-        'X-Shopify-Access-Token': TOKEN,
-        'Accept': 'application/json'
-      }
-    });
-    return res.status(r.status).json(await r.json());
+    const q   = encodeURIComponent(req.query.query || '');
+    const rsp = await fetch(
+      `https://${SHOP}/admin/api/2023-10/customers/search.json?query=${q}`,
+      { headers }
+    );
+    const data = await rsp.json();
+    res.status(rsp.status).json(data);
   } catch (e) {
     res.status(500).json({ error: 'Fehler bei Suche', details: e.message });
   }
 });
 
-/*======================== 3) Kreationen eines Kunden laden =========*/
+/* =========== Kreationen eines Kunden =========== */
 app.get('/get-kreationen', async (req, res) => {
-  const customerId = req.query.customerId;
+  const { customerId } = req.query;
   if (!customerId) return res.status(400).json({ error: 'customerId fehlt' });
 
   try {
-    // 3.1  Kundenspezifische Metafelder → Referenzen
-    const mfRes = await fetch(`https://${SHOP}/admin/api/2023-10/customers/${customerId}/metafields.json`, {
-      headers: { 'X-Shopify-Access-Token': TOKEN, 'Accept': 'application/json' }
-    });
-    const meta = await mfRes.json();
-    console.log('📦 Kundemetafelder', JSON.stringify(meta, null, 2));
+    // 1) Metafields des Kunden lesen
+    const mfRes = await fetch(
+      `https://${SHOP}/admin/api/2023-10/customers/${customerId}/metafields.json`,
+      { headers }
+    );
+    const mfData = await mfRes.json();
+    console.log('📦 Kundemetafelder', JSON.stringify(mfData, null, 2));
 
-    const refs = (meta.metafields || []).filter(f => f.key.startsWith('kreation_'));
+    // 2) Alle Kreations-Referenzen sammeln
+    const kreRefs = (mfData.metafields || []).filter(f => f.key.startsWith('kreation_'));
+
+    // 3) Jeden Verweis auflösen
     const kreationen = [];
-
-    for (const ref of refs) {
-      const gid = ref.value; // gid://shopify/Metaobject/123
-      const numeric = gid.toString().split('/').pop();
-
-      // 3.2  REST‑Versuch
-      const rest = await fetch(`https://${SHOP}/admin/api/2023-10/metaobjects/${numeric}.json`, {
-        headers: { 'X-Shopify-Access-Token': TOKEN, 'Accept': 'application/json' }
-      });
-
-      if (rest.status === 200) {
-        const d = await rest.json();
-        kreationen.push(d.metaobject);
+    for (const ref of kreRefs) {
+      const id = ref.value.replace(/^gid:\/\/shopify\/Metaobject\//, '');
+      const kRes = await fetch(
+        `https://${SHOP}/admin/api/2023-10/metaobjects/${id}.json`,
+        { headers }
+      );
+      if (kRes.status === 404) {
+        console.warn(`⚠️ Metaobject ${ref.value} nicht gefunden – Platzhalter angelegt`);
+        kreationen.push({ id: ref.value, fields: [] });
         continue;
       }
-
-      // 3.3  Fallback GraphQL – einige Shops liefern 404 auf REST
-      const gqlRes = await fetch(`https://${SHOP}/admin/api/2023-10/graphql.json`, {
-        method: 'POST',
-        headers: {
-          'X-Shopify-Access-Token': TOKEN,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          query: `query($id: ID!) {\n  metaobject(id: $id) {\n    id handle type\n    fields { key value }\n  }\n}`,
-          variables: { id: gid }
-        })
-      });
-      const gqlData = await gqlRes.json();
-      if (gqlData.data?.metaobject) {
-        kreationen.push(gqlData.data.metaobject);
-      } else {
-        console.warn(`⚠️ Metaobject ${gid} weder REST noch GraphQL gefunden`);
-      }
+      const kData = await kRes.json();
+      // REST liefert {metaobject:{id,fields:[]...}}
+      kreationen.push(kData.metaobject ?? kData);
     }
 
     res.json({ kreationen });
   } catch (e) {
-    res.status(500).json({ error: 'Fehler beim Laden', details: e.message });
+    res.status(500).json({ error: 'Fehler beim Lesen', details: e.message });
   }
 });
 
-/*======================== 4) Kreation speichern / updaten =========*/
+/* =========== Kreation speichern =========== */
 app.post('/save-kreation', async (req, res) => {
-  const { customerId, kreation, metaobjectId } = req.body;
-  if (!customerId || !kreation) return res.status(400).json({ error: 'customerId oder kreation fehlt' });
+  const { customerId, metaobjectId, kreation } = req.body;
+  if (!customerId || !kreation) return res.status(400).json({ error: 'Parameter fehlen' });
 
-  // 4.1 Typliste
-  const typeMap = {
-    name: 'single_line_text_field', konzentration: 'single_line_text_field', menge_ml: 'integer', datum_erstellung: 'date', bemerkung: 'multi_line_text_field',
-    duft_1_name: 'single_line_text_field', duft_1_anteil: 'integer', duft_1_gramm: 'number_decimal', duft_1_ml: 'number_decimal',
-    duft_2_name: 'single_line_text_field', duft_2_anteil: 'integer', duft_2_gramm: 'number_decimal', duft_2_ml: 'number_decimal',
-    duft_3_name: 'single_line_text_field', duft_3_anteil: 'integer', duft_3_gramm: 'number_decimal', duft_3_ml: 'number_decimal'
-  };
+  const fields = kreationToFields(kreation);
 
-  const fieldsArr = Object.entries(kreation)
-    .filter(([_, v]) => v !== null && v !== undefined)
-    .map(([key, value]) => ({ key, value: String(value), type: typeMap[key] || 'single_line_text_field' }));
-
+  // -------   1) Metaobject neu oder updaten   -------
   try {
-    /* ---- UPDATE via GraphQL ---- */
-    if (metaobjectId) {
-      const gqlRes = await fetch(`https://${SHOP}/admin/api/2023-10/graphql.json`, {
-        method: 'POST',
-        headers: { 'X-Shopify-Access-Token': TOKEN, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          query: `mutation metaobjectUpdate($id: ID!, $fields: [MetaobjectFieldInput!]!) {
-            metaobjectUpdate(id: $id, fields: $fields) {
-              metaobject { id }
-              userErrors { field message }
-            }
-          }`,
-          variables: { id: metaobjectId, fields: fieldsArr }
-        })
-      });
-      const gqlData = await gqlRes.json();
-      if (gqlData.data?.metaobjectUpdate?.userErrors?.length) {
-        console.error('GraphQL‑Fehler', gqlData.data.metaobjectUpdate.userErrors);
-        return res.status(400).json({ error: 'GraphQL‑Fehler', details: gqlData.data.metaobjectUpdate.userErrors });
-      }
-      return res.json({ success: true, updated: true });
+    let metaId   = metaobjectId;
+    let created  = false;
+    let updated  = false;
+    /* ---- create ---- */
+    if (!metaId) {
+      const payload = {
+        metaobject: {
+          type: 'parfumkreation',
+          handle: `kreation-${Date.now()}`,
+          published: true,
+          fields
+        }
+      };
+      console.log('🆕 CREATE payload', JSON.stringify(payload, null, 2));
+      const r = await fetch(
+        `https://${SHOP}/admin/api/2023-10/metaobjects.json`,
+        { method: 'POST', headers, body: JSON.stringify(payload) }
+      );
+      const txt = await r.text();
+      console.log('🆕 CREATE status', r.status, txt);
+      if (r.status >= 400) return res.status(r.status).json({ error: txt, status: r.status });
+      created = true;
+      metaId  = (JSON.parse(txt)).metaobject.id;
+    } else {
+      /* ---- update ---- */
+      const payload = {
+        metaobject: {
+          id: metaId.replace(/^gid:\/\/shopify\/Metaobject\//, ''),
+          fields
+        }
+      };
+      console.log('✏️ UPDATE payload', JSON.stringify(payload, null, 2));
+      const r = await fetch(
+        `https://${SHOP}/admin/api/2023-10/metaobjects/${payload.metaobject.id}.json`,
+        { method: 'PUT', headers, body: JSON.stringify(payload) }
+      );
+      const txt = await r.text();
+      console.log('✏️ UPDATE status', r.status, txt || '(leer)');
+      if (r.status >= 400) return res.status(r.status).json({ error: txt, status: r.status });
+      updated = true;
     }
 
-    /* ---- NEU (REST‑POST) ---- */
-    const payload = {
-      metaobject: {
-        type: 'parfumkreation', published: true,
-        handle: `parfumkreation-${Math.random().toString(36).slice(2,10)}`,
-        fields: fieldsArr
-      }
-    };
-    const p = await fetch(`https://${SHOP}/admin/api/2023-10/metaobjects.json`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-Shopify-Access-Token': TOKEN },
-      body: JSON.stringify(payload)
-    });
-    const pData = await p.json();
-    const newId = pData?.metaobject?.id;
-    if (!newId) throw new Error('Metaobject‑POST fehlgeschlagen');
+    // -------   2) Referenz beim Kunden setzen   -------
+    if (created) {
+      // freien Slot suchen
+      const slots = ['kreation_1', 'kreation_2', 'kreation_3', 'kreation_4', 'kreation_5'];
+      const cur   = await fetch(
+        `https://${SHOP}/admin/api/2023-10/customers/${customerId}/metafields.json`,
+        { headers }
+      ).then(r => r.json());
 
-    // freien Slot anhängen
-    const slots = ['kreation_1','kreation_2','kreation_3','kreation_4','kreation_5'];
-    const metaRes = await fetch(`https://${SHOP}/admin/api/2023-10/customers/${customerId}/metafields.json`, {
-      headers: { 'X-Shopify-Access-Token': TOKEN, 'Accept': 'application/json' }
-    });
-    const exist = await metaRes.json();
-    for (const slot of slots) {
-      if (!(exist.metafields||[]).some(f=>f.key===slot)) {
-        await fetch(`https://${SHOP}/admin/api/2023-10/customers/${customerId}/metafields.json`, {
-          method: 'POST',
-          headers: { 'X-Shopify-Access-Token': TOKEN, 'Content-Type': 'application/json', 'Accept': 'application/json' },
-          body: JSON.stringify({ metafield: { namespace:'custom', key:slot, type:'metaobject_reference', value:newId, owner_resource:'customer', owner_id:customerId } })
-        });
-        return res.json({ success: true, slot });
+      let chosen = null;
+      for (const s of slots) {
+        if (!cur.metafields.find(m => m.key === s)) { chosen = s; break; }
       }
+      if (!chosen) return res.status(400).json({ error: 'Alle Kreations-Slots belegt' });
+
+      const mfPayload = {
+        metafield: {
+          namespace: 'custom',
+          key: chosen,
+          type: 'metaobject_reference',
+          value: metaId,
+          owner_resource: 'customer',
+          owner_id: customerId
+        }
+      };
+      const mfRes = await fetch(
+        `https://${SHOP}/admin/api/2023-10/customers/${customerId}/metafields.json`,
+        { method: 'POST', headers, body: JSON.stringify(mfPayload) }
+      );
+      const mfTxt = await mfRes.text();
+      console.log('🔗 Link-Slot', chosen, 'Status', mfRes.status, mfTxt);
+      if (mfRes.status >= 400) return res.status(mfRes.status).json({ error: mfTxt });
     }
-    res.status(400).json({ error: 'Alle Slots belegt' });
+
+    res.json({ success: true, created, updated });
   } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: e.message || 'Fehler beim Speichern' });
+    console.error('❌ Save-Error', e);
+    res.status(500).json({ error: e.message });
   }
 });
 
-/*========================*/
+/* =========== Server-start =========== */
 app.listen(PORT, () => console.log(`🚀 Middleware läuft auf Port ${PORT}`));
