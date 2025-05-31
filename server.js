@@ -112,7 +112,7 @@ app.post('/save-kreation', async (req, res) => {
   const { customerId, kreation, metaobjectId } = req.body;
   if (!customerId || !kreation) return res.status(400).json({ error: 'customerId oder kreation fehlt' });
 
-  // Mapping → Feldtypen
+  // 4.1 Typliste
   const typeMap = {
     name: 'single_line_text_field', konzentration: 'single_line_text_field', menge_ml: 'integer', datum_erstellung: 'date', bemerkung: 'multi_line_text_field',
     duft_1_name: 'single_line_text_field', duft_1_anteil: 'integer', duft_1_gramm: 'number_decimal', duft_1_ml: 'number_decimal',
@@ -120,43 +120,45 @@ app.post('/save-kreation', async (req, res) => {
     duft_3_name: 'single_line_text_field', duft_3_anteil: 'integer', duft_3_gramm: 'number_decimal', duft_3_ml: 'number_decimal'
   };
 
-  const fields = Object.entries(kreation)
+  const fieldsArr = Object.entries(kreation)
     .filter(([_, v]) => v !== null && v !== undefined)
     .map(([key, value]) => ({ key, value: String(value), type: typeMap[key] || 'single_line_text_field' }));
 
   try {
-    /* ---- UPDATE ---- */
+    /* ---- UPDATE via GraphQL ---- */
     if (metaobjectId) {
-      const num = metaobjectId.toString().split('/').pop();
-      const u = await fetch(`https://${SHOP}/admin/api/2023-10/metaobjects/${num}.json`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          'X-Shopify-Access-Token': TOKEN
-        },
-        body: JSON.stringify({ metaobject: { fields } })
+      const gqlRes = await fetch(`https://${SHOP}/admin/api/2023-10/graphql.json`, {
+        method: 'POST',
+        headers: { 'X-Shopify-Access-Token': TOKEN, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query: `mutation metaobjectUpdate($id: ID!, $fields: [MetaobjectFieldInput!]!) {
+            metaobjectUpdate(id: $id, fields: $fields) {
+              metaobject { id }
+              userErrors { field message }
+            }
+          }`,
+          variables: { id: metaobjectId, fields: fieldsArr }
+        })
       });
-      if (u.status >= 400) throw new Error('Update‑Status ' + u.status);
+      const gqlData = await gqlRes.json();
+      if (gqlData.data?.metaobjectUpdate?.userErrors?.length) {
+        console.error('GraphQL‑Fehler', gqlData.data.metaobjectUpdate.userErrors);
+        return res.status(400).json({ error: 'GraphQL‑Fehler', details: gqlData.data.metaobjectUpdate.userErrors });
+      }
       return res.json({ success: true, updated: true });
     }
 
-    /* ---- NEU ---- */
+    /* ---- NEU (REST‑POST) ---- */
     const payload = {
       metaobject: {
-        type: 'parfumkreation',
-        published: true,
+        type: 'parfumkreation', published: true,
         handle: `parfumkreation-${Math.random().toString(36).slice(2,10)}`,
-        fields
+        fields: fieldsArr
       }
     };
     const p = await fetch(`https://${SHOP}/admin/api/2023-10/metaobjects.json`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'X-Shopify-Access-Token': TOKEN
-      },
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-Shopify-Access-Token': TOKEN },
       body: JSON.stringify(payload)
     });
     const pData = await p.json();
@@ -169,7 +171,6 @@ app.post('/save-kreation', async (req, res) => {
       headers: { 'X-Shopify-Access-Token': TOKEN, 'Accept': 'application/json' }
     });
     const exist = await metaRes.json();
-
     for (const slot of slots) {
       if (!(exist.metafields||[]).some(f=>f.key===slot)) {
         await fetch(`https://${SHOP}/admin/api/2023-10/customers/${customerId}/metafields.json`, {
@@ -177,7 +178,7 @@ app.post('/save-kreation', async (req, res) => {
           headers: { 'X-Shopify-Access-Token': TOKEN, 'Content-Type': 'application/json', 'Accept': 'application/json' },
           body: JSON.stringify({ metafield: { namespace:'custom', key:slot, type:'metaobject_reference', value:newId, owner_resource:'customer', owner_id:customerId } })
         });
-        return res.json({ success:true, slot });
+        return res.json({ success: true, slot });
       }
     }
     res.status(400).json({ error: 'Alle Slots belegt' });
