@@ -49,11 +49,35 @@ app.get('/get-kreationen', async (req, res) => {
     const kreationen = [];
 
     for (const ref of kreationRefs) {
-      let refId = ref.value;
-      if (typeof refId === 'string' && refId.startsWith('gid://')) refId = refId.split('/').pop();
-      const kRes = await fetch(`https://${SHOP}/admin/api/2023-10/metaobjects/${refId}.json`, {
-        headers: { 'X-Shopify-Access-Token': TOKEN, 'Content-Type': 'application/json' }
-      });
+      const refVal = ref.value;
+      let meta;
+      try {
+        let kRes;
+        if (typeof refVal === 'string' && refVal.startsWith('gid://')) {
+          // gid -> numerische ID
+          const id = refVal.split('/').pop();
+          kRes = await fetch(`https://${SHOP}/admin/api/2023-10/metaobjects/${id}.json`, {
+            headers: { 'X-Shopify-Access-Token': TOKEN, 'Content-Type': 'application/json' }
+          });
+        } else {
+          // handle (z.B. kreation-XYZ) → GET /metaobjects/<type>/<handle>.json
+          kRes = await fetch(`https://${SHOP}/admin/api/2023-10/metaobjects/parfumkreation/${encodeURIComponent(refVal)}.json`, {
+            headers: { 'X-Shopify-Access-Token': TOKEN, 'Content-Type': 'application/json' }
+          });
+        }
+        if (kRes.status === 200) {
+          const raw = await kRes.json();
+          console.log('🔎 RAW Metaobject‑Antwort:', raw);
+          meta = raw.metaobject || raw;
+          if(!(meta.fields||[]).some(f=>f.key==='name')) meta.fields=[...(meta.fields||[]),{key:'name',value:meta.handle,type:'single_line_text_field'}];
+          kreationen.push(meta);
+        } else {
+          console.log('⚠️ Metaobject', refVal, 'nicht gefunden (Status', kRes.status, ')');
+        }
+      } catch(err){
+        console.log('❌ Fehler beim Laden Metaobject', refVal, err.message);
+      }
+    }
       if (kRes.status === 200) {
         const raw = await kRes.json();
         console.log('🔎 RAW Metaobject‑Antwort:', raw);
