@@ -1,4 +1,4 @@
-// server.js – Shopify‑Middleware | Metaobjects lesen per GraphQL‑Fallback
+// server.js – Shopify‑Middleware | Metaobjects lesen (inkl. Debug‑Logs)
 import express from 'express';
 import cors from 'cors';
 import bodyParser from 'body-parser';
@@ -12,7 +12,7 @@ const TOKEN= process.env.SHOPIFY_TOKEN;
 app.use(cors({ origin:true }));
 app.use(bodyParser.json());
 
-/************ kleine Helper‑Funktion ************/
+/************ Helper: GraphQL‑Call ************/
 async function fetchGraphQL(query, variables={}){
   const res = await fetch(`https://${SHOP}/admin/api/2023-10/graphql.json`, {
     method:'POST',
@@ -50,6 +50,8 @@ app.get('/get-kreationen', async (req,res)=>{
     const metaRes=await fetch(`https://${SHOP}/admin/api/2023-10/customers/${customerId}/metafields.json`,{
       headers:{'X-Shopify-Access-Token':TOKEN,'Content-Type':'application/json'}});
     const metaJson=await metaRes.json();
+    console.log('📦 Kundemetafelder', JSON.stringify(metaJson, null, 2));
+
     const all=metaJson.metafields;
     const handleMap=Object.fromEntries(all.filter(f=>f.key.endsWith('_handle')).map(f=>[f.key.replace('_handle',''),f.value]));
     const refs=all.filter(f=>f.type==='metaobject_reference'&&f.key.startsWith('kreation_'));
@@ -70,6 +72,7 @@ app.get('/get-kreationen', async (req,res)=>{
       if(!meta){
         const gql=`query($id:ID!){ metaobject(id:$id){ id handle type fields{key value} } }`;
         const gRes=await fetchGraphQL(gql,{id:gid});
+        if(gRes.errors) console.log('🛑 GraphQL', JSON.stringify(gRes.errors));
         meta=gRes.data?.metaobject||null;
       }
       // 3.4 Handle‑Fetch falls refVal selbst ein Handle ist
@@ -86,7 +89,7 @@ app.get('/get-kreationen', async (req,res)=>{
   }catch(e){res.status(500).json({error:'Fehler beim Lesen der Kreationen',details:e.message});}
 });
 
-/**************** 4. Kreation speichern (REST‑Variante bleibt vorerst) ****************/
+/**************** 4. Kreation speichern (REST – bleibt vorerst) ****************/
 app.post('/save-kreation', async (req,res)=>{
   const {customerId,kreation}=req.body;
   try{
@@ -101,6 +104,8 @@ app.post('/save-kreation', async (req,res)=>{
 
     const slots=['kreation_1','kreation_2','kreation_3','kreation_4','kreation_5'];
     const custMeta=await fetch(`https://${SHOP}/admin/api/2023-10/customers/${customerId}/metafields.json`,{headers:{'X-Shopify-Access-Token':TOKEN,'Content-Type':'application/json'}}).then(r=>r.json());
+    console.log('📦 Kundemetafelder nach Speichern', JSON.stringify(custMeta, null, 2));
+
     for(const s of slots){
       if(!custMeta.metafields.find(f=>f.key===s)){
         // GID referenz + Handle Text
