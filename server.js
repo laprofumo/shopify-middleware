@@ -43,6 +43,37 @@ app.get('/search-customer', async (req, res) => {
 app.get('/get-kreationen', async (req, res) => {
   const customerId = req.query.customerId;
   if (!customerId) return res.status(400).json({ error: 'CustomerId fehlt' });
+  try {
+    // alle Metafelder des Kunden
+    const metaRes = await fetch(`https://${SHOP}/admin/api/2023-10/customers/${customerId}/metafields.json`, {
+      headers: { 'X-Shopify-Access-Token': TOKEN, 'Content-Type': 'application/json' }
+    });
+    const metaJson = await metaRes.json();
+    const allFields = metaJson.metafields;
+    // Map für Handles (kreation_1_handle etc.)
+    const handleMap = Object.fromEntries(allFields.filter(f => f.key.startsWith('kreation_') && f.key.endsWith('_handle')).map(f => [f.key.replace('_handle',''), f.value]));
+    // nur metaobject_reference nehmen
+    const kreationRefs = allFields.filter(f => f.type === 'metaobject_reference' && f.key.startsWith('kreation_'));
+    const kreationen=[];
+
+    for(const ref of kreationRefs){
+      const refVal=ref.value; let meta=null;
+      // 1) gid
+      if(typeof refVal==='string' && refVal.startsWith('gid://')){
+        const id=refVal.split('/').pop();
+        const rId=await fetch(`https://${SHOP}/admin/api/2023-10/metaobjects/${id}.json`,{headers:{'X-Shopify-Access-Token':TOKEN,'Content-Type':'application/json'}});
+        if(rId.status===200) meta=(await rId.json()).metaobject;
+      }
+      // 2) handle direct
+      if(!meta){const rH=await fetch(`https://${SHOP}/admin/api/2023-10/metaobjects/parfumkreation/${encodeURIComponent(refVal)}.json`,{headers:{'X-Shopify-Access-Token':TOKEN,'Content-Type':'application/json'}});if(rH.status===200) meta=(await rH.json()).metaobject;}
+      // 3) placeholder mit gespeichertem handle
+      if(!meta){const handle=handleMap[ref.key]||refVal;meta={handle,fields:[]};}
+      if(!(meta.fields||[]).some(f=>f.key==='name')) meta.fields=[...(meta.fields||[]),{key:'name',value:meta.handle,type:'single_line_text_field'}];
+      kreationen.push(meta);
+    }
+    res.json({kreationen});
+  }catch(e){res.status(500).json({error:'Fehler beim Lesen der Kreationen',details:e.message});}
+});
 
   try {
     const metaRes = await fetch(`https://${SHOP}/admin/api/2023-10/customers/${customerId}/metafields.json`, {
@@ -115,16 +146,20 @@ app.post('/save-kreation', async (req, res) => {
       headers: { 'X-Shopify-Access-Token': TOKEN, 'Content-Type': 'application/json' }
     }).then(r => r.json());
 
-    for (const s of slots) {
-      if (!custMeta.metafields.find(f => f.key === s)) {
-        await fetch(`https://${SHOP}/admin/api/2023-10/customers/${customerId}/metafields.json`, {
-          method: 'POST', headers: { 'X-Shopify-Access-Token': TOKEN, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ metafield: { namespace: 'custom', key: s, type: 'metaobject_reference', value: metaobjectId, owner_resource: 'customer', owner_id: customerId } })
-        });
-        return res.json({ success: true, slot: s });
+    for(const s of slots){
+      if(!custMeta.metafields.find(f=>f.key===s)){
+        // 1️⃣ GID referenz speichern
+        await fetch(`https://${SHOP}/admin/api/2023-10/customers/${customerId}/metafields.json`,{
+          method:'POST', headers:{'X-Shopify-Access-Token':TOKEN,'Content-Type':'application/json'},
+          body:JSON.stringify({metafield:{namespace:'custom',key:s,type:'metaobject_reference',value:metaobjectId,owner_resource:'customer',owner_id:customerId}})});
+        // 2️⃣ zusätzlich Handle ablegen (leichte Anzeige im Frontend)
+        await fetch(`https://${SHOP}/admin/api/2023-10/customers/${customerId}/metafields.json`,{
+          method:'POST', headers:{'X-Shopify-Access-Token':TOKEN,'Content-Type':'application/json'},
+          body:JSON.stringify({metafield:{namespace:'custom',key:`${s}_handle`,type:'single_line_text_field',value:newMO.metaobject.handle,owner_resource:'customer',owner_id:customerId}})});
+        return res.json({success:true,slot:s});
       }
     }
-    res.status(400).json({ error: 'Alle Slots belegt' });
+    res.status(400).json({error:'Alle Slots belegt'});({ error: 'Alle Slots belegt' });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
