@@ -1,144 +1,176 @@
-// server.js – Shopify‑Middleware | Metaobjects lesen + Debug‑Logs (mixed_reference fix)
-import express from 'express';
-import cors from 'cors';
-import bodyParser from 'body-parser';
-import fetch from 'node-fetch';
+// Shopify Middleware – erstellt/aktualisiert Parfüm‑Metaobjects
+// ⚙️  Node ≥18 (ES‑Modules)
 
-const app  = express();
-const PORT = process.env.PORT || 3000;
-const SHOP = 'la-profumoteca-gmbh.myshopify.com';
-const TOKEN= process.env.SHOPIFY_TOKEN;
+import express from "express";
+import cors from "cors";
+import bodyParser from "body-parser";
+import fetch from "node-fetch";
 
-app.use(cors({ origin:true }));
+// ‑‑‑ ENV --------------------------------------------------------------------
+const PORT  = process.env.PORT ?? 10000;
+const SHOP  = process.env.SHOPIFY_SHOP   || "la-profumoteca-gmbh.myshopify.com";
+const TOKEN = process.env.SHOPIFY_TOKEN  || "<YOUR_PRIVATE_APP_TOKEN>"; // 🔒 setzen!
+
+// ‑‑‑ Basis ‑ Express ---------------------------------------------------------
+const app = express();
+app.use(cors({origin:true}));
 app.use(bodyParser.json());
 
-/************ Helper: GraphQL‑Call ************/
-async function fetchGraphQL(query, variables={}){
-  const res = await fetch(`https://${SHOP}/admin/api/2023-10/graphql.json`, {
-    method:'POST',
-    headers:{'Content-Type':'application/json','X-Shopify-Access-Token':TOKEN},
-    body:JSON.stringify({query,variables})
-  });
-  return res.json();
-}
+// ‑‑‑ Hilfsfunktionen ---------------------------------------------------------
+const shopRest = (path, init = {}) => fetch(
+  `https://${SHOP}/admin/api/2023-10/${path}`,
+  {
+    headers: {
+      "Content-Type": "application/json",
+      "X-Shopify-Access-Token": TOKEN,
+      ...(init.headers || {})
+    },
+    ...init
+  }
+);
 
-/**************** 1. Kunde anlegen ****************/
-app.post('/create-customer', async (req,res)=>{
-  try{
-    const r=await fetch(`https://${SHOP}/admin/api/2023-10/customers.json`,{
-      method:'POST',
-      headers:{'Content-Type':'application/json','X-Shopify-Access-Token':TOKEN},
-      body:JSON.stringify({customer:req.body})
+const typeMap = {
+  name:              "single_line_text_field",
+  konzentration:     "single_line_text_field",
+  menge_ml:          "integer",
+  datum_erstellung:  "date",
+  bemerkung:         "multi_line_text_field",
+  duft_1_name:       "single_line_text_field",
+  duft_1_anteil:     "integer",
+  duft_1_gramm:      "number_decimal",
+  duft_1_ml:         "number_decimal",
+  duft_2_name:       "single_line_text_field",
+  duft_2_anteil:     "integer",
+  duft_2_gramm:      "number_decimal",
+  duft_2_ml:         "number_decimal",
+  duft_3_name:       "single_line_text_field",
+  duft_3_anteil:     "integer",
+  duft_3_gramm:      "number_decimal",
+  duft_3_ml:         "number_decimal"
+};
+
+// ‑‑‑ Endpunkte ---------------------------------------------------------------
+
+// ➕ 1. Kunde anlegen ----------------------------------------------------------
+app.post("/create-customer", async (req, res) => {
+  try {
+    const r = await shopRest("customers.json", {
+      method: "POST",
+      body: JSON.stringify({ customer: req.body })
     });
-    res.status(r.status).json(await r.json());
-  }catch{res.status(500).json({error:'Fehler bei Kundenanlage'});}  
+    const d = await r.json();
+    res.status(r.status).json(d);
+  } catch (e) { res.status(500).json({ error: "Fehler bei Kundenanlage" }); }
 });
 
-/**************** 2. Kundensuche ****************/
-app.get('/search-customer', async (req,res)=>{
-  const q=req.query.query||'';
-  try{
-    const r=await fetch(`https://${SHOP}/admin/api/2023-10/customers/search.json?query=${encodeURIComponent(q)}`,{
-      headers:{'Content-Type':'application/json','X-Shopify-Access-Token':TOKEN}
-    });
-    res.status(r.status).json(await r.json());
-  }catch{res.status(500).json({error:'Fehler bei Suche'});}  
+// 🔍 2. Suche -----------------------------------------------------------------
+app.get("/search-customer", async (req, res) => {
+  try {
+    const q = encodeURIComponent(req.query.query ?? "");
+    const r = await shopRest(`customers/search.json?query=${q}`);
+    const d = await r.json();
+    res.status(r.status).json(d);
+  } catch { res.status(500).json({ error: "Fehler bei Suche" }); }
 });
 
-/**************** 3. Kreationen eines Kunden lesen ****************/
-app.get('/get-kreationen', async (req,res)=>{
-  const customerId=req.query.customerId;
-  if(!customerId) return res.status(400).json({error:'CustomerId fehlt'});
-  try{
-    // 3.1 Kundemetafelder holen
-    const metaRes=await fetch(`https://${SHOP}/admin/api/2023-10/customers/${customerId}/metafields.json`,{
-      headers:{'X-Shopify-Access-Token':TOKEN,'Content-Type':'application/json'}
-    });
-    const metaJson=await metaRes.json();
-    console.log('📦 Kundemetafelder', JSON.stringify(metaJson, null, 2));
+// 📖 3. Kreationen eines Kunden lesen -----------------------------------------
+app.get("/get-kreationen", async (req, res) => {
+  const { customerId } = req.query;
+  if (!customerId) return res.status(400).json({ error: "customerId fehlt" });
 
-    const all=metaJson.metafields||[];
-    const handleMap=Object.fromEntries(all.filter(f=>f.key.endsWith('_handle')).map(f=>[f.key.replace('_handle',''),f.value]));
+  try {
+    // 1) Metafields des Kunden holen
+    const mfRes = await shopRest(`customers/${customerId}/metafields.json`);
+    const mfData = await mfRes.json();
+    console.log("📦 Kundemetafelder", JSON.stringify(mfData, null, 2));
 
-    // mixed_reference ODER metaobject_reference zulassen
-    const refs = all.filter(f=>['metaobject_reference','mixed_reference'].includes(f.type) && f.key.startsWith('kreation_'));
-    const kreationen=[];
+    const refs = (mfData.metafields || []).filter(m => m.key.startsWith("kreation_"));
+    const kreationen = [];
 
-    for(const ref of refs){
-      const refVal=ref.value; let meta=null; let gid=refVal;
+    for (const { value } of refs) {
+      const id = value.split("/").pop(); // gid://shopify/Metaobject/123 → 123
+      // GraphQL‑Alleinfalls: wir brauchen Felder & Handle
+      const gql = {
+        query: `query Get($id:ID!){metaobject(id:$id){id handle type fields{key value}}}`,
+        variables: { id: `gid://shopify/Metaobject/${id}` }
+      };
+      const gRes = await shopRest("graphql.json", {
+        method: "POST", body: JSON.stringify(gql)
+      });
+      const gData = await gRes.json();
 
-      // 3.2 REST‑ID Versuch
-      if(refVal?.startsWith('gid://')){
-        const id=refVal.split('/').pop();
-        const rId=await fetch(`https://${SHOP}/admin/api/2023-10/metaobjects/${id}.json`,{
-          headers:{'X-Shopify-Access-Token':TOKEN,'Content-Type':'application/json'}
-        });
-        if(rId.status===200) meta=(await rId.json()).metaobject;
-      }
-
-      // 3.3 GraphQL‑Fallback
-      if(!meta){
-        const gql=`query($id:ID!){ metaobject(id:$id){ id handle type fields{key value} } }`;
-        const gRes=await fetchGraphQL(gql,{id:gid});
-        if(gRes.errors) console.log('🛑 GraphQL', JSON.stringify(gRes.errors));
-        meta=gRes.data?.metaobject||null;
-      }
-
-      // 3.4 REST by Handle, falls Wert selbst ein Handle ist
-      if(!meta){
-        const rH=await fetch(`https://${SHOP}/admin/api/2023-10/metaobjects/parfumkreation/${encodeURIComponent(refVal)}.json`,{
-          headers:{'X-Shopify-Access-Token':TOKEN,'Content-Type':'application/json'}
-        });
-        if(rH.status===200) meta=(await rH.json()).metaobject;
-      }
-
-      // 3.5 Platzhalter, falls nichts gefunden
-      if(!meta){ meta={handle:handleMap[ref.key]||refVal,fields:[]}; }
-      if(!(meta.fields||[]).some(f=>f.key==='name')) meta.fields=[...(meta.fields||[]),{key:'name',value:meta.handle,type:'single_line_text_field'}];
-      kreationen.push(meta);
+      const mo = gData.data?.metaobject;
+      if (mo) kreationen.push(mo);
+      else console.warn(`⚠️ Metaobject ${value} nicht gefunden`);
     }
-
-    res.json({kreationen});
-  }catch(e){
-    res.status(500).json({error:'Fehler beim Lesen der Kreationen',details:e.message});
+    res.json({ kreationen });
+  } catch (e) {
+    res.status(500).json({ error: "Fehler beim Lesen", details: e.message });
   }
 });
 
-/**************** 4. Kreation speichern (REST) ****************/
-app.post('/save-kreation', async (req,res)=>{
-  const {customerId,kreation}=req.body;
-  try{
-    const typeMap={name:'single_line_text_field',konzentration:'single_line_text_field',menge_ml:'integer',datum_erstellung:'date',bemerkung:'multi_line_text_field',duft_1_name:'single_line_text_field',duft_1_anteil:'integer',duft_1_gramm:'number_decimal',duft_1_ml:'number_decimal',duft_2_name:'single_line_text_field',duft_2_anteil:'integer',duft_2_gramm:'number_decimal',duft_2_ml:'number_decimal',duft_3_name:'single_line_text_field',duft_3_anteil:'integer',duft_3_gramm:'number_decimal',duft_3_ml:'number_decimal'};
-    const fields=Object.entries(kreation).filter(([_,v])=>v!==null&&v!==undefined).map(([k,v])=>({key:k,value:String(v)||'keine',type:typeMap[k]||'single_line_text_field'}));
-    const handle=`kreation-${Date.now()}`;
-    const newMO={metaobject:{type:'parfumkreation',published:true,handle,fields}};
-    const moRes=await fetch(`https://${SHOP}/admin/api/2023-10/metaobjects.json`,{
-      method:'POST',headers:{'Content-Type':'application/json','X-Shopify-Access-Token':TOKEN},body:JSON.stringify(newMO)});
-    const moJson=await moRes.json();
-    const metaobjectId=moJson?.metaobject?.id;
-    if(!metaobjectId) return res.status(400).json({error:'Metaobject nicht erstellt'});
+// 💾 4. Kreation speichern / aktualisieren ------------------------------------
+app.post("/save-kreation", async (req, res) => {
+  const { customerId, kreation, metaobjectId } = req.body;
+  if (!customerId || !kreation) return res.status(400).json({ error: "Daten fehlen" });
 
-    const slots=['kreation_1','kreation_2','kreation_3','kreation_4','kreation_5'];
-    const custMetaRes=await fetch(`https://${SHOP}/admin/api/2023-10/customers/${customerId}/metafields.json`,{
-      headers:{'X-Shopify-Access-Token':TOKEN,'Content-Type':'application/json'}
-    });
-    const custMeta=await custMetaRes.json();
-    console.log('📦 Kundemetafelder nach Speichern', JSON.stringify(custMeta, null, 2));
+  // 🗂 Felder vorbereiten
+  const fields = Object.entries(kreation).map(([key, value]) => ({
+    key,
+    value: String(value),
+    type: typeMap[key] || "single_line_text_field"
+  }));
 
-    for(const s of slots){
-      if(!custMeta.metafields.find(f=>f.key===s)){
-        // Referenz + Text‑Handle speichern
-        await fetch(`https://${SHOP}/admin/api/2023-10/customers/${customerId}/metafields.json`,{
-          method:'POST',headers:{'X-Shopify-Access-Token':TOKEN,'Content-Type':'application/json'},
-          body:JSON.stringify({metafield:{namespace:'custom',key:s,type:'metaobject_reference',value:metaobjectId,owner_resource:'customer',owner_id:customerId}})});
-        await fetch(`https://${SHOP}/admin/api/2023-10/customers/${customerId}/metafields.json`,{
-          method:'POST',headers:{'X-Shopify-Access-Token':TOKEN,'Content-Type':'application/json'},
-          body:JSON.stringify({metafield:{namespace:'custom',key:`${s}_handle`,type:'single_line_text_field',value:handle,owner_resource:'customer',owner_id:customerId}})});
-        return res.json({success:true,slot:s});
-      }
+  const payload = { metaobject: { type: "parfumkreation", fields } };
+  let id = metaobjectId;
+
+  try {
+    if (metaobjectId) {
+      // UPDATE (PUT)
+      const upRes = await shopRest(`metaobjects/${metaobjectId}.json`, {
+        method: "PUT",
+        body: JSON.stringify(payload)
+      });
+      if (!upRes.ok) throw new Error(`Update‑Status ${upRes.status}`);
+      console.log(`✏️  Kreation ${metaobjectId} aktualisiert`);
+    } else {
+      // NEU (POST)
+      payload.metaobject.handle = `kreation-${Date.now()}`;
+      payload.metaobject.published = true;
+      const crRes = await shopRest("metaobjects.json", { method: "POST", body: JSON.stringify(payload) });
+      const crData = await crRes.json();
+      id = crData.metaobject?.id;
+      if (!id) throw new Error("Metaobject‑Erstellung fehlgeschlagen");
+
+      // Slot finden & Referenz hinzufügen
+      const existing = await (await shopRest(`customers/${customerId}/metafields.json`)).json();
+      const slots = ["kreation_1","kreation_2","kreation_3","kreation_4","kreation_5"];
+      let chosen = null;
+      for (const s of slots) if (!existing.metafields.find(m => m.key === s)) { chosen = s; break; }
+      if (!chosen) return res.status(400).json({ error: "Alle Slots belegt" });
+
+      await shopRest(`customers/${customerId}/metafields.json`, {
+        method: "POST",
+        body: JSON.stringify({
+          metafield: {
+            namespace: "custom",
+            key: chosen,
+            type: "metaobject_reference",
+            value: id,
+            owner_resource: "customer",
+            owner_id: customerId
+          }
+        })
+      });
+      console.log(`📌 Referenz im Slot ${chosen} hinterlegt`);
     }
-    res.status(400).json({error:'Alle Slots belegt'});
-  }catch(e){res.status(500).json({error:e.message});}
+
+    res.json({ success: true, id });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message || "Fehler beim Speichern" });
+  }
 });
 
-app.listen(PORT,()=>console.log(`🚀 Middleware läuft auf Port ${PORT}`));
+// ‑‑‑ Start -------------------------------------------------------------------
+app.listen(PORT, () => console.log(`🚀 Middleware läuft auf Port ${PORT}`));
