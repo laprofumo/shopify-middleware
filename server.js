@@ -1,175 +1,132 @@
-// server.js  –  Shopify-Middleware (GraphQL‐Version)
-import express from "express";
-import cors from "cors";
-import bodyParser from "body-parser";
-import fetch from "node-fetch";
+// server.js – Shopify‑Middleware (GraphQL‑Version) – Handle‑Fix
+import express from 'express';
+import cors from 'cors';
+import bodyParser from 'body-parser';
+import fetch from 'node-fetch';
 
-const app = express();
-const PORT = process.env.PORT || 3000;
+const app   = express();
+const PORT  = process.env.PORT || 3000;
 
-const SHOP = "la-profumoteca-gmbh.myshopify.com";
-const API_VERSION = "2024-04";               //  GraphQL-Version ≥ 2023-01
-const TOKEN = process.env.SHOPIFY_TOKEN;     //  muss Scope „write_metaobjects“ & „write_customers“ haben
+// ✅  Shop‑Daten – Access‑Token im Render‑Dashboard hinterlegen
+const SHOP  = 'la-profumoteca-gmbh.myshopify.com';
+const TOKEN = process.env.SHOPIFY_TOKEN;
 
-app.use(cors({ origin: true }));
+app.use(cors({ origin:true }));
 app.use(bodyParser.json());
 
-/* ─────────────────────────  HELPER  ──────────────────────── */
-async function callGraphQL(query, variables = {}) {
-  const res = await fetch(`https://${SHOP}/admin/api/${API_VERSION}/graphql.json`, {
-    method: "POST",
+/* ─────────────────────────────────────────── HELPERS ─────────────────────────────────────────── */
+
+/** Low‑level GraphQL‑Call an Shopify Admin‑API */
+async function shopifyGraphQL(query, variables = {}) {
+  const res = await fetch(`https://${SHOP}/admin/api/2023-10/graphql.json`, {
+    method : 'POST',
     headers: {
-      "Content-Type": "application/json",
-      "X-Shopify-Access-Token": TOKEN,
-      "Accept": "application/json"
+      'Content-Type'          : 'application/json',
+      'X-Shopify-Access-Token': TOKEN,
     },
-    body: JSON.stringify({ query, variables })
+    body : JSON.stringify({ query, variables })
   });
-  const json = await res.json();
-  if (json.errors) throw new Error(JSON.stringify(json.errors));
-  return json.data;
+
+  const raw = await res.text();
+  console.log('🟣 GraphQL', res.status, raw.slice(0,300));
+  let data;
+  try { data = JSON.parse(raw); } catch { throw new Error('Antwort kein JSON'); }
+  if (data.errors && data.errors.length) throw new Error(JSON.stringify(data.errors));
+  return data.data;
 }
 
-/* ─────────────────────────  CUSTOMER  ─────────────────────── */
-app.post("/create-customer", async (req, res) => {
+/* ─────────────────────────────────────────── KUNDE ─────────────────────────────────────────── */
+
+app.post('/create-customer', async (req, res) => {
   try {
-    const { first_name, last_name, email, phone } = req.body;
-    const gql = `
-      mutation($input: CustomerInput!) {
-        customerCreate(input: $input) {
-          customer { id firstName lastName }
-          userErrors { field message }
-        }
-      }`;
-    const data = await callGraphQL(gql, {
-      input: {
-        firstName: first_name,
-        lastName:  last_name,
-        email,
-        phone
-      }
+    const r = await fetch(`https://${SHOP}/admin/api/2023-10/customers.json`, {
+      method :'POST',
+      headers:{ 'Content-Type':'application/json','X-Shopify-Access-Token':TOKEN },
+      body   : JSON.stringify({ customer:req.body })
     });
-    res.json({ customer: data.customerCreate.customer, errors: data.customerCreate.userErrors });
+    const j = await r.json();
+    res.status(r.status).json(j);
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error:'Fehler bei Kundenanlage', details:e.message });
   }
 });
 
-app.get("/search-customer", async (req, res) => {
-  const query = req.query.query || "";
-  try {
-    const gql = `
-      query($q: String!) {
-        customers(first: 10, query: $q) {
-          edges { node { id firstName lastName email } }
-        }
-      }`;
-    const d = await callGraphQL(gql, { q: query });
-    res.json({ customers: d.customers.edges.map(e => ({ ...e.node, id: e.node.id.split("/").pop() })) });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+app.get('/search-customer', async (req,res)=>{
+  try{
+    const r = await fetch(`https://${SHOP}/admin/api/2023-10/customers/search.json?query=${encodeURIComponent(req.query.query||'')}`,{
+      headers:{'Content-Type':'application/json','X-Shopify-Access-Token':TOKEN}
+    });
+    const j = await r.json();
+    res.status(r.status).json(j);
+  }catch(e){res.status(500).json({error:'Fehler bei Suche',details:e.message});}
 });
 
-/* ──────────────  KREATION LESEN  ───────────── */
-app.get("/get-kreationen", async (req, res) => {
+/* ───────────────────────────────────── KREATION LESEN ───────────────────────────────────── */
+
+app.get('/get-kreationen', async (req,res)=>{
   const customerId = req.query.customerId;
-  if (!customerId) return res.status(400).json({ error: "customerId fehlt" });
-
-  try {
-    /* 1️⃣  Kundimetafelder lesen */
-    const metaGQL = `
-      query($id: ID!){
-        customer(id: $id) {
-          metafields(first: 10, namespace: "custom") {
-            edges { node { key value type } }
-          }
-        }
-      }`;
-    const metaData = await callGraphQL(metaGQL, { id: `gid://shopify/Customer/${customerId}` });
-    const refs = metaData.customer.metafields.edges
-      .filter(e => e.node.type === "metaobject_reference")
-      .map(e => e.node.value);
-
-    /* 2️⃣  Alle referenzierten Metaobjects abholen */
-    if (!refs.length) return res.json({ kreationen: [] });
-
-    const kreationGQL = `
-      query($ids: [ID!]!) {
-        nodes(ids: $ids) {
-          ... on Metaobject { id handle type fields { key value } }
-        }
-      }`;
-    const kreationenData = await callGraphQL(kreationGQL, { ids: refs });
-    res.json({ kreationen: kreationenData.nodes });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  if(!customerId) return res.status(400).json({error:'customerId fehlt'});
+  try{
+    const metaRes = await fetch(`https://${SHOP}/admin/api/2023-10/customers/${customerId}/metafields.json`,{
+      headers:{'X-Shopify-Access-Token':TOKEN,'Content-Type':'application/json'}
+    });
+    const meta = await metaRes.json();
+    console.log('📦 Kundemetafelder',JSON.stringify(meta));
+    const refs = meta.metafields.filter(m=>m.key.startsWith('kreation_'));
+    const kreationen=[];
+    const q=`query Get($id:ID!){ metaobject(id:$id){ id handle type fields{key value} }}`;
+    for(const r of refs){
+      try{const d=await shopifyGraphQL(q,{id:r.value});kreationen.push(d.metaobject);}catch{console.warn('⚠️ metaobject fehlend');}
+    }
+    res.json({kreationen});
+  }catch(e){res.status(500).json({error:'Fehler beim Laden',details:e.message});}
 });
 
-/* ──────────────  KREATION SPEICHERN / UPDATEN  ───────────── */
-app.post("/save-kreation", async (req, res) => {
+/* ───────────────────────────────── KREATION SPEICHERN ───────────────────────────────── */
+
+app.post('/save-kreation', async (req,res)=>{
   const { customerId, metaobjectId, kreation } = req.body;
-  if (!customerId) return res.status(400).json({ error: "customerId fehlt" });
+  if(!customerId||!kreation) return res.status(400).json({error:'Pflichtdaten fehlen'});
 
-  try {
-    /* 1️⃣  metaobjectUpsert (create oder update) */
-    const fields = Object.entries(kreation).map(([k, v]) => ({ key: k, value: String(v) }));
-    const upsertGQL = `
-      mutation($input: MetaobjectUpsertInput!) {
-        metaobjectUpsert(metaobject: $input) {
-          metaobject { id handle }
-          userErrors { field message }
+  try{
+    const typeMap={ name:'single_line_text_field', konzentration:'single_line_text_field', menge_ml:'integer', datum_erstellung:'date', bemerkung:'multi_line_text_field',
+    duft_1_name:'single_line_text_field',duft_1_anteil:'integer',duft_1_gramm:'number_decimal',duft_1_ml:'number_decimal',
+    duft_2_name:'single_line_text_field',duft_2_anteil:'integer',duft_2_gramm:'number_decimal',duft_2_ml:'number_decimal',
+    duft_3_name:'single_line_text_field',duft_3_anteil:'integer',duft_3_gramm:'number_decimal',duft_3_ml:'number_decimal'};
+    const fields=Object.entries(kreation).map(([k,v])=>({key:k,value:String(v),type:typeMap[k]||'single_line_text_field'}));
+
+    const gql=`mutation Upsert($meta:MetaobjectUpsertInput!){
+      metaobjectUpsert(metaobject:$meta){ metaobject{ id handle } userErrors{field message} }
+    }`;
+
+    const metaInput = metaobjectId
+      ? { id: metaobjectId, fields }
+      : { handle:{ value:`kreation-${Date.now()}` }, type:'parfumkreation', status:'ACTIVE', fields };
+
+    console.log('🆕 UPSERT', JSON.stringify(metaInput,null,2));
+
+    const up = await shopifyGraphQL(gql,{ meta: metaInput });
+    const errs = up.metaobjectUpsert.userErrors;
+    if(errs && errs.length) return res.status(400).json({ error: errs.map(e=>e.message).join(', ') });
+    const newId = up.metaobjectUpsert.metaobject.id;
+
+    // neuen Slot setzen falls neu
+    if(!metaobjectId){
+      const slotNames=['kreation_1','kreation_2','kreation_3','kreation_4','kreation_5'];
+      const existing = await fetch(`https://${SHOP}/admin/api/2023-10/customers/${customerId}/metafields.json`,{headers:{'X-Shopify-Access-Token':TOKEN,'Content-Type':'application/json'}}).then(r=>r.json());
+      for(const key of slotNames){
+        if(!existing.metafields.find(m=>m.key===key)){
+          await fetch(`https://${SHOP}/admin/api/2023-10/customers/${customerId}/metafields.json`,{
+            method:'POST',headers:{'X-Shopify-Access-Token':TOKEN,'Content-Type':'application/json'},
+            body:JSON.stringify({metafield:{namespace:'custom',key,type:'metaobject_reference',value:newId,owner_resource:'customer',owner_id:customerId}})
+          });
+          break;
         }
-      }`;
-    const upsertData = await callGraphQL(upsertGQL, {
-      input: {
-        id: metaobjectId || null,
-        type: "parfumkreation",
-        handle: metaobjectId ? undefined : `kreation-${Date.now()}`,
-        fields
       }
-    });
-    const moId = upsertData.metaobjectUpsert.metaobject.id;
-
-    /* 2️⃣  Falls neu: freien Slot am Kunden finden - oder beim Update überspringen */
-    if (!metaobjectId) {
-      const slots = ["kreation_1", "kreation_2", "kreation_3", "kreation_4", "kreation_5"];
-      const setGQL = `
-        mutation($customerId: ID!, $namespace:String!, $key:String!, $value:JSON!) {
-          metafieldsSet(metafields: [{
-            ownerId: $customerId,
-            namespace: $namespace,
-            key: $key,
-            type: "metaobject_reference",
-            value: $value
-          }]) {
-            metafields { id }
-            userErrors { field message }
-          }
-        }`;
-      /*  Metafelder des Kunden holen – um belegte Schlüssel zu überspringen */
-      const metaGQL = `query($id:ID!){ customer(id:$id){ metafields(first:10,namespace:"custom"){edges{node{key}}}}}`;
-      const metaData = await callGraphQL(metaGQL, { id: `gid://shopify/Customer/${customerId}` });
-      const used = metaData.customer.metafields.edges.map(e => e.node.key);
-
-      const slot = slots.find(s => !used.includes(s));
-      if (!slot) return res.status(400).json({ error: "Alle Slots belegt" });
-
-      await callGraphQL(setGQL, {
-        customerId: `gid://shopify/Customer/${customerId}`,
-        namespace: "custom",
-        key: slot,
-        value: moId
-      });
-      return res.json({ success: true, slot });
     }
 
-    /* – bei Update – */
-    res.json({ success: true, updated: true });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+    res.json({success:true,id:newId});
+  }catch(e){console.error('❌',e);res.status(500).json({error:e.message});}
 });
 
-app.listen(PORT, () => console.log(`🚀 Middleware läuft auf Port ${PORT}`));
+app.listen(PORT,()=>console.log(`🚀 Middleware Port ${PORT}`));
