@@ -17,9 +17,11 @@ app.use(bodyParser.json());
 
 /* =========== Helfer =========== */
 const headers = {
-  'X-Shopify-Access-Token': TOKEN,
-  'Content-Type': 'application/json'
+   'X-Shopify-Access-Token': TOKEN,
+   'Content-Type': 'application/json',
++  'Accept': 'application/json'          //  ←  neu: verhindert 406
 };
+
 
 function kreationToFields(kre) {
   const typeMap = {
