@@ -19,7 +19,7 @@ app.use(bodyParser.json());
 const headers = {
    'X-Shopify-Access-Token': TOKEN,
    'Content-Type': 'application/json',
-+  'Accept': 'application/json'          //  ←  neu: verhindert 406
+'Accept': 'application/json'          //  ←  neu: verhindert 406
 };
 
 
