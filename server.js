@@ -174,13 +174,13 @@ app.post('/save-kreation', async (req, res) => {
       metaobjectId = d.metaobjectUpdate.metaobject.id;
     } else {
       // CREATE neues Metaobject
-      const mutation = `
-        mutation C($meta: MetaobjectCreateInput!) {
-          metaobjectCreate(metaobject: $meta) {
-            metaobject { id handle status }
-            userErrors { field message }
-          }
-        }`;
+     const mutation = `
+  mutation C($meta: MetaobjectCreateInput!) {
+    metaobjectCreate(metaobject: $meta) {
+      metaobject { id handle }
+      userErrors { field message }
+    }
+  }`;
       const vars = {
         meta: {
           type: 'parfumkreation',
