@@ -1,161 +1,258 @@
-// server.js – Shopify Middleware (GraphQL only): Create/Update Metaobject + link via metafieldsSet (mixed_reference)
+// server.js – Shopify Middleware (GraphQL-basiert, Create/Update + Verknüpfung)
+// -------------------------------------------------------------
 import express from 'express';
 import cors from 'cors';
 import bodyParser from 'body-parser';
 import fetch from 'node-fetch';
 
-const app  = express();
-const PORT = process.env.PORT || 3000;
+const app = express();
+const PORT = process.env.PORT || 10000;
 
-// ✅ Shop-Konfiguration – Access Token in Render als SHOPIFY_TOKEN setzen
-const SHOP  = 'la-profumoteca-gmbh.myshopify.com';
-const TOKEN = process.env.SHOPIFY_TOKEN;
+// <<< ANPASSEN falls nötig >>>
+const SHOP = 'la-profumoteca-gmbh.myshopify.com';
+const TOKEN = process.env.SHOPIFY_TOKEN; // in Render als Secret gesetzt
+
+if (!TOKEN) {
+  console.error('❌ SHOPIFY_TOKEN fehlt in den Umgebungsvariablen.');
+}
 
 app.use(cors({ origin: true }));
 app.use(bodyParser.json());
 
-/* ───────────────────────────── Helper ───────────────────────────── */
+// Hilfsfunktion: Admin GraphQL call
 async function shopifyGraphQL(query, variables = {}) {
-  const res = await fetch(`https://${SHOP}/admin/api/2023-10/graphql.json`, {
+  const url = `https://${SHOP}/admin/api/2025-04/graphql.json`;
+  const res = await fetch(url, {
     method: 'POST',
     headers: {
-      'Content-Type': 'application/json',
       'X-Shopify-Access-Token': TOKEN,
+      'Content-Type': 'application/json'
     },
     body: JSON.stringify({ query, variables })
   });
-  const raw = await res.text();
-  console.log('🟣 GraphQL', res.status, raw.slice(0, 300));
-  let data;
-  try { data = JSON.parse(raw); } catch { throw new Error('Antwort kein JSON'); }
-  if (data.errors && data.errors.length) throw new Error(JSON.stringify(data.errors));
-  return data.data;
+
+  const text = await res.text();
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch (e) {
+    console.error('🟣 GraphQL RAW:', text);
+    throw new Error('GraphQL-Antwort nicht parsebar');
+  }
+
+  if (!res.ok || json.errors) {
+    console.error('🟣 GraphQL', res.status, JSON.stringify(json));
+    const errList = json.errors?.map(e => e.message) || [];
+    throw new Error(JSON.stringify(errList.length ? errList : ['Unbekannter GraphQL Fehler']));
+  }
+  // Debug
+  console.log('🟣 GraphQL 200', JSON.stringify(json));
+  return json.data;
 }
 
-/* ───────────────────────────── Kunden ───────────────────────────── */
+// --- Kunden anlegen (REST belassen, funktioniert bereits) ---
 app.post('/create-customer', async (req, res) => {
   try {
-    const r = await fetch(`https://${SHOP}/admin/api/2023-10/customers.json`, {
+    const response = await fetch(`https://${SHOP}/admin/api/2023-10/customers.json`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': TOKEN },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Shopify-Access-Token': TOKEN,
+      },
       body: JSON.stringify({ customer: req.body })
     });
-    const j = await r.json();
-    res.status(r.status).json(j);
-  } catch (e) {
-    res.status(500).json({ error: 'Fehler bei Kundenanlage', details: e.message });
+    const data = await response.json();
+    res.status(response.status).json(data);
+  } catch (error) {
+    res.status(500).json({ error: 'Fehler bei Kundenanlage' });
   }
 });
 
+// --- Kundensuche (REST belassen) ---
 app.get('/search-customer', async (req, res) => {
+  const query = req.query.query || '';
   try {
-    const r = await fetch(`https://${SHOP}/admin/api/2023-10/customers/search.json?query=${encodeURIComponent(req.query.query || '')}`,
-      { headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': TOKEN } }
-    );
-    const j = await r.json();
-    res.status(r.status).json(j);
-  } catch (e) { res.status(500).json({ error: 'Fehler bei Suche', details: e.message }); }
+    const response = await fetch(`https://${SHOP}/admin/api/2023-10/customers/search.json?query=${encodeURIComponent(query)}`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Shopify-Access-Token': TOKEN,
+      },
+    });
+    const data = await response.json();
+    res.status(response.status).json(data);
+  } catch (error) {
+    res.status(500).json({ error: 'Fehler bei Suche' });
+  }
 });
 
-/* ───────────────────── Kreationen lesen (Customer → Metaobjects) ───────────────────── */
+// --- Kreationen eines Kunden lesen (REST + GraphQL Mix) ---
 app.get('/get-kreationen', async (req, res) => {
   const customerId = req.query.customerId;
-  if (!customerId) return res.status(400).json({ error: 'customerId fehlt' });
+  if (!customerId) return res.status(400).json({ error: 'CustomerId fehlt' });
   try {
-    const metaRes = await fetch(`https://${SHOP}/admin/api/2023-10/customers/${customerId}/metafields.json`, {
-      headers: { 'X-Shopify-Access-Token': TOKEN, 'Content-Type': 'application/json' }
+    // 1) Kundenslots lesen (REST)
+    const r = await fetch(`https://${SHOP}/admin/api/2023-10/customers/${customerId}/metafields.json`, {
+      headers: {
+        'X-Shopify-Access-Token': TOKEN,
+        'Content-Type': 'application/json'
+      }
     });
-    const meta = await metaRes.json();
-    console.log('📦 Kundemetafelder', JSON.stringify(meta));
+    const data = await r.json();
+    console.log('📦 Kundemetafelder', JSON.stringify(data));
+    const slots = (data.metafields || []).filter(m => m.namespace === 'custom' && m.key.startsWith('kreation_'));
 
-    const refs = (meta.metafields || []).filter(m => m.key.startsWith('kreation_'));
+    // 2) Für jeden Slot versuchen Metaobject per GraphQL zu lesen
     const kreationen = [];
-
-    const q = `query Get($id: ID!) { metaobject(id: $id) { id handle type fields { key value } } }`;
-    for (const r of refs) {
+    for (const m of slots) {
+      const gid = m.value; // z.B. gid://shopify/Metaobject/123
       try {
-        const d = await shopifyGraphQL(q, { id: r.value });
-        if (d && d.metaobject) kreationen.push(d.metaobject);
-        else console.warn('⚠️ metaobject leer', r.value);
+        const q = `
+          query M($id: ID!) {
+            metaobject(id: $id) {
+              id
+              handle
+              type
+              fields { key value }
+            }
+          }`;
+        const d = await shopifyGraphQL(q, { id: gid });
+        const mo = d.metaobject;
+        if (mo) {
+          kreationen.push({ slotKey: m.key, metaobject: mo });
+        } else {
+          console.warn(`⚠️ Metaobject ${gid} nicht gefunden – Platzhalter angelegt`);
+          kreationen.push({ slotKey: m.key, metaobject: { id: gid, handle: '(unbekannt)', type: 'parfumkreation', fields: [] } });
+        }
       } catch (e) {
-        console.warn('⚠️ metaobject fehlend', r.value, e.message);
+        console.warn(`⚠️ Metaobject ${gid} nicht gefunden – Platzhalter angelegt`);
+        kreationen.push({ slotKey: m.key, metaobject: { id: gid, handle: '(unbekannt)', type: 'parfumkreation', fields: [] } });
       }
     }
+
     res.json({ kreationen });
-  } catch (e) { res.status(500).json({ error: 'Fehler beim Laden', details: e.message }); }
+  } catch (error) {
+    res.status(500).json({ error: 'Fehler beim Lesen der Kreationen', details: error.message });
+  }
 });
 
-/* ───────────────────── Kreation speichern (Create/Update + Link) ───────────────────── */
+// --- Kreation speichern (CREATE oder UPDATE + Verknüpfen im Kundenslot) ---
 app.post('/save-kreation', async (req, res) => {
-  const { customerId, metaobjectId, kreation, slotKey } = req.body;
-  if (!customerId || !kreation) return res.status(400).json({ error: 'Pflichtdaten fehlen' });
-
+  const { customerId, kreation, kreationId, handle } = req.body;
   try {
-    // 1) Felder für GraphQL aufbereiten (ohne "type")
-    const fields = Object.entries(kreation).map(([key, value]) => ({
-      key,
-      value: String(value ?? '')
-    }));
+    if (!customerId || !kreation) {
+      return res.status(400).json({ error: 'customerId oder kreation fehlt' });
+    }
 
-    // 2) Create oder Update
-    let savedId = metaobjectId || null;
+    // Felder vorbereiten (nur key/value – Typen sind in der Def. hinterlegt)
+    const allowedKeys = new Set([
+      'name','konzentration','menge_ml','datum_erstellung','bemerkung',
+      'duft_1_name','duft_1_anteil','duft_1_gramm','duft_1_ml',
+      'duft_2_name','duft_2_anteil','duft_2_gramm','duft_2_ml',
+      'duft_3_name','duft_3_anteil','duft_3_gramm','duft_3_ml'
+    ]);
+
+    const fields = Object.entries(kreation)
+      .filter(([k,v]) => allowedKeys.has(k) && v !== null && v !== undefined && String(v).trim() !== '')
+      .map(([key, value]) => ({ key, value: String(value) }));
+
+    let metaobjectId = kreationId; // falls Frontend eine gid liefert (Update-Fall)
 
     if (metaobjectId) {
-      const MUT_UPDATE = `mutation M($id: ID!, $fields: [MetaobjectFieldInput!]!) {
-        metaobjectUpdate(metaobject: { id: $id, fields: $fields }) {
-          metaobject { id handle }
-          userErrors { field message }
-        }
-      }`;
-      const up = await shopifyGraphQL(MUT_UPDATE, { id: metaobjectId, fields });
-      const errs = up.metaobjectUpdate.userErrors || [];
-      if (errs.length) return res.status(400).json({ error: errs.map(e => e.message).join(', ') });
-      savedId = up.metaobjectUpdate.metaobject.id;
-      console.log('✅ UPDATE OK', savedId);
+      // UPDATE existierendes Metaobject
+      const mutation = `
+        mutation U($id: ID!, $meta: MetaobjectUpdateInput!) {
+          metaobjectUpdate(id: $id, metaobject: $meta) {
+            metaobject { id handle }
+            userErrors { field message }
+          }
+        }`;
+      const vars = { id: metaobjectId, meta: { fields } };
+      const d = await shopifyGraphQL(mutation, vars);
+      const errs = d.metaobjectUpdate.userErrors || [];
+      if (errs.length) throw new Error(JSON.stringify(errs.map(e=>e.message)));
+      metaobjectId = d.metaobjectUpdate.metaobject.id;
     } else {
-      const handle = `kreation-${Date.now()}`;
-      const MUT_CREATE = `mutation C($handle: String!, $fields: [MetaobjectFieldInput!]!) {
-        metaobjectCreate(metaobject: { definitionHandle: "parfumkreation", handle: $handle, fields: $fields }) {
-          metaobject { id handle }
+      // CREATE neues Metaobject
+      const mutation = `
+        mutation C($meta: MetaobjectCreateInput!) {
+          metaobjectCreate(metaobject: $meta) {
+            metaobject { id handle status }
+            userErrors { field message }
+          }
+        }`;
+      const vars = {
+        meta: {
+          type: 'parfumkreation',
+          handle: handle || `kreation-${Date.now()}`,
+          fields
+        }
+      };
+      console.log('🆕 CREATE payload', JSON.stringify({metaobject: vars.meta}, null, 2));
+      const d = await shopifyGraphQL(mutation, vars);
+      const errs = d.metaobjectCreate.userErrors || [];
+      console.log('🆕 CREATE status OK');
+      if (errs.length) throw new Error(JSON.stringify(errs.map(e=>e.message)));
+      metaobjectId = d.metaobjectCreate.metaobject.id;
+    }
+
+    // Kundenslots prüfen (REST ok)
+    const r = await fetch(`https://${SHOP}/admin/api/2023-10/customers/${customerId}/metafields.json`, {
+      headers: {
+        'X-Shopify-Access-Token': TOKEN,
+        'Content-Type': 'application/json'
+      }
+    });
+    const metaData = await r.json();
+    console.log('📦 Kundemetafelder', JSON.stringify(metaData));
+
+    const existing = (metaData.metafields || []).filter(m => m.namespace === 'custom' && m.key.startsWith('kreation_'));
+    const slotNames = ['kreation_1','kreation_2','kreation_3','kreation_4','kreation_5'];
+
+    // Slot finden (falls Update: denselben Slot wiederverwenden)
+    let chosenKey = null;
+    const metaGid = metaobjectId; // bereits gid://shopify/Metaobject/...
+
+    const foundSame = existing.find(m => m.value === metaGid);
+    if (foundSame) {
+      chosenKey = foundSame.key;
+    } else {
+      // ersten freien Slot nehmen
+      for (const s of slotNames) {
+        if (!existing.find(m => m.key === s)) { chosenKey = s; break; }
+      }
+      // falls alle belegt -> überschreibe kreation_5
+      if (!chosenKey) chosenKey = 'kreation_5';
+    }
+
+    // Verknüpfen via GraphQL metafieldsSet (mixed_reference!)
+    const customerGid = `gid://shopify/Customer/${customerId}`;
+    const mfMutation = `
+      mutation M($metafields: [MetafieldsSetInput!]!) {
+        metafieldsSet(metafields: $metafields) {
+          metafields { id key type value }
           userErrors { field message }
         }
       }`;
-      const cr = await shopifyGraphQL(MUT_CREATE, { handle, fields });
-      const errs = cr.metaobjectCreate.userErrors || [];
-      if (errs.length) return res.status(400).json({ error: errs.map(e => e.message).join(', ') });
-      savedId = cr.metaobjectCreate.metaobject.id;
-      console.log('✅ CREATE OK', savedId);
-    }
+    const mfVars = {
+      metafields: [
+        {
+          namespace: 'custom',
+          key: chosenKey,
+          ownerId: customerGid,
+          type: 'mixed_reference',
+          value: metaGid
+        }
+      ]
+    };
+    const mfData = await shopifyGraphQL(mfMutation, mfVars);
+    const mfErrs = mfData.metafieldsSet.userErrors || [];
+    if (mfErrs.length) throw new Error(JSON.stringify(mfErrs.map(e=>e.message)));
 
-    // 3) Kunden‑Slot setzen/verknüpfen (GraphQL metafieldsSet, type: mixed_reference)
-    //    Falls slotKey mitgegeben, genau den verwenden; sonst ersten freien finden
-    let useKey = slotKey;
-    if (!useKey) {
-      const existing = await fetch(`https://${SHOP}/admin/api/2023-10/customers/${customerId}/metafields.json`, {
-        headers: { 'X-Shopify-Access-Token': TOKEN, 'Content-Type': 'application/json' }
-      }).then(r => r.json());
-      const slotNames = ['kreation_1', 'kreation_2', 'kreation_3', 'kreation_4', 'kreation_5'];
-      useKey = slotNames.find(k => !(existing.metafields || []).some(m => m.key === k));
-      if (!useKey) useKey = 'kreation_1'; // notfalls überschreiben – besser als gar nicht verlinken
-    }
-
-    const ownerId = `gid://shopify/Customer/${customerId}`;
-    const MUT_SET = `mutation Set($metafields: [MetafieldsSetInput!]!) {
-      metafieldsSet(metafields: $metafields) {
-        metafields { id key type value }
-        userErrors { field message }
-      }
-    }`;
-    const setPayload = [{ ownerId, namespace: 'custom', key: useKey, type: 'mixed_reference', value: savedId }];
-    const setRes = await shopifyGraphQL(MUT_SET, { metafields: setPayload });
-    const setErrs = setRes.metafieldsSet.userErrors || [];
-    if (setErrs.length) return res.status(400).json({ error: setErrs.map(e => e.message).join(', ') });
-    console.log('🔗 SLOT OK', useKey, '→', savedId);
-
-    res.json({ success: true, id: savedId, slot: useKey });
-  } catch (e) {
-    console.error('❌ SAVE ERROR', e);
-    res.status(500).json({ error: e.message || 'Fehler beim Speichern' });
+    return res.json({ success: true, metaobjectId, slot: chosenKey });
+  } catch (error) {
+    console.error('❌ SAVE ERROR', error);
+    return res.status(500).json({ error: String(error.message || error) });
   }
 });
 
